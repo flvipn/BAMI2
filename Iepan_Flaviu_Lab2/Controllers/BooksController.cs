@@ -34,13 +34,59 @@ namespace Iepan_Flaviu_Lab2.Controllers
         }
 
         // GET: Books
-        public async Task<IActionResult> Index()
+        public async Task<IActionResult> Index(string sortOrder, string? searchString)
         {
-            var libraryContext = _context.Book
-                .Include(b => b.Genre)
-                // adjust Include depending on your Book model navigation name:
-                .Include(b => b.AuthorRef);
-            return View(await libraryContext.ToListAsync());
+            ViewData["TitleSortParm"] = String.IsNullOrEmpty(sortOrder) ? "title_desc" : "";
+            ViewData["PriceSortParm"] = sortOrder == "Price" ? "price_desc" : "Price";
+            ViewData["AuthorSortParm"] = sortOrder == "Author" ? "author_desc" : "Author";
+
+            // Keep the current filter so the textbox is preserved
+            ViewData["CurrentFilter"] = searchString;
+
+            IQueryable<Book> booksQuery = _context.Book
+                .Include(b => b.AuthorRef)
+                .Include(b => b.Genre);
+
+            // Apply filtering by title if provided
+            if (!string.IsNullOrWhiteSpace(searchString))
+            {
+                booksQuery = booksQuery.Where(b => b.Title.Contains(searchString));
+            }
+
+            switch (sortOrder)
+            {
+                case "title_desc":
+                    booksQuery = booksQuery.OrderByDescending(b => b.Title);
+                    break;
+                case "Price":
+                    booksQuery = booksQuery.OrderBy(b => b.Price);
+                    break;
+                case "price_desc":
+                    booksQuery = booksQuery.OrderByDescending(b => b.Price);
+                    break;
+                case "Author":
+                    // order by author's last name then first name (nulls last)
+                    booksQuery = booksQuery.OrderBy(b => b.AuthorRef!.LastName).ThenBy(b => b.AuthorRef!.FirstName);
+                    break;
+                case "author_desc":
+                    booksQuery = booksQuery.OrderByDescending(b => b.AuthorRef!.LastName).ThenByDescending(b => b.AuthorRef!.FirstName);
+                    break;
+                default:
+                    booksQuery = booksQuery.OrderBy(b => b.Title);
+                    break;
+            }
+
+            var model = await booksQuery
+                .Select(b => new BookViewModel
+                {
+                    ID = b.ID,
+                    Title = b.Title,
+                    Price = b.Price,
+                    FullName = b.AuthorRef != null ? b.AuthorRef.FirstName + " " + b.AuthorRef.LastName : "(no author)"
+                })
+                .ToListAsync();
+
+            return View(model);
         }
 
         // GET: Books/Details/5
@@ -51,6 +97,9 @@ namespace Iepan_Flaviu_Lab2.Controllers
             var book = await _context.Book
                 .Include(b => b.Genre)
                 .Include(b => b.AuthorRef)
+                .Include(b => b.Orders)
+                    .ThenInclude(o => o.Customer)
+                .AsNoTracking()
                 .FirstOrDefaultAsync(m => m.ID == id);
 
             if (book == null) return NotFound();
@@ -70,14 +119,28 @@ namespace Iepan_Flaviu_Lab2.Controllers
         [HttpPost]
         [ValidateAntiForgeryToken]
         public async Task<IActionResult> Create([Bind("ID,Title,Price,GenreID,AuthorID")] Book book)
-        {
-            if (ModelState.IsValid)
+        {    // if model binding failed, re-populate dropdowns and return view
+            if (!ModelState.IsValid)
             {
+                ViewData["GenreID"] = GetGenresSelectList(book.GenreID);
+                ViewData["AuthorID"] = GetAuthorsSelectList(book.AuthorID);
+                return View(book);
+            }
+
+            try
+            {
+                // model binder already created 'book' from form values (ID is omitted so DB will set it)
                 _context.Add(book);
                 await _context.SaveChangesAsync();
                 return RedirectToAction(nameof(Index));
             }
+            catch (DbUpdateException)
+            {
+                // Safe user-facing message; consider logging the exception (ILogger) for diagnostics
+                ModelState.AddModelError(string.Empty, "Unable to save changes. Try again, and if the problem persists contact the administrator.");
+            }
 
+            // if we got here, something failed — re-populate dropdowns and show form with validation message
             ViewData["GenreID"] = GetGenresSelectList(book.GenreID);
             ViewData["AuthorID"] = GetAuthorsSelectList(book.AuthorID);
             return View(book);
@@ -97,30 +160,45 @@ namespace Iepan_Flaviu_Lab2.Controllers
         }
 
         // POST: Books/Edit/5
-        [HttpPost]
+        [HttpPost, ActionName("Edit")]
         [ValidateAntiForgeryToken]
-        public async Task<IActionResult> Edit(int id, [Bind("ID,Title,Price,GenreID,AuthorID")] Book book)
+        public async Task<IActionResult> EditPost(int? id)
         {
-            if (id != book.ID) return NotFound();
+            if (id == null)
+            {
+                return NotFound();
+            }
 
-            if (ModelState.IsValid)
+            var bookToUpdate = await _context.Book.FirstOrDefaultAsync(s => s.ID == id);
+            if (bookToUpdate == null)
+            {
+                return NotFound();
+            }
+
+            // Only update these properties to avoid overposting
+            if (await TryUpdateModelAsync<Book>(
+                bookToUpdate,
+                "",
+                b => b.Title,
+                b => b.Price,
+                b => b.GenreID,
+                b => b.AuthorID))
             {
                 try
                 {
-                    _context.Update(book);
                     await _context.SaveChangesAsync();
+                    return RedirectToAction(nameof(Index));
                 }
-                catch (DbUpdateConcurrencyException)
+                catch (DbUpdateException)
                 {
-                    if (!_context.Book.Any(e => e.ID == book.ID)) return NotFound();
-                    throw;
+                    ModelState.AddModelError("", "Unable to save changes. Try again, and if the problem persists contact the administrator.");
                 }
-                return RedirectToAction(nameof(Index));
             }
 
-            ViewData["GenreID"] = GetGenresSelectList(book.GenreID);
-            ViewData["AuthorID"] = GetAuthorsSelectList(book.AuthorID);
-            return View(book);
+            // Re-populate dropdowns and return the view with the entity including any attempted changes
+            ViewData["GenreID"] = GetGenresSelectList(bookToUpdate.GenreID);
+            ViewData["AuthorID"] = GetAuthorsSelectList(bookToUpdate.AuthorID);
+            return View("Edit", bookToUpdate);
         }
 
         // GET: Books/Delete/5

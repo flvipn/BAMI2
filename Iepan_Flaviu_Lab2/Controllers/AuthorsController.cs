@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.AspNetCore.Mvc.Rendering;
 using Microsoft.EntityFrameworkCore;
 using Iepan_Flaviu_Lab2.Data;
 using Iepan_Flaviu_Lab2.Models;
@@ -33,8 +32,13 @@ namespace Iepan_Flaviu_Lab2.Controllers
                 return NotFound();
             }
 
+            // Include the Books collection and each Book's Genre so the view can render them
             var author = await _context.Author
+                .Include(a => a.Books)
+                    .ThenInclude(b => b.Genre)
+                .AsNoTracking()
                 .FirstOrDefaultAsync(m => m.ID == id);
+
             if (author == null)
             {
                 return NotFound();
@@ -50,8 +54,6 @@ namespace Iepan_Flaviu_Lab2.Controllers
         }
 
         // POST: Authors/Create
-        // To protect from overposting attacks, enable the specific properties you want to bind to.
-        // For more details, see http://go.microsoft.com/fwlink/?LinkId=317598.
         [HttpPost]
         [ValidateAntiForgeryToken]
         public async Task<IActionResult> Create([Bind("ID,FirstName,LastName")] Author author)
@@ -82,8 +84,6 @@ namespace Iepan_Flaviu_Lab2.Controllers
         }
 
         // POST: Authors/Edit/5
-        // To protect from overposting attacks, enable the specific properties you want to bind to.
-        // For more details, see http://go.microsoft.com/fwlink/?LinkId=317598.
         [HttpPost]
         [ValidateAntiForgeryToken]
         public async Task<IActionResult> Edit(int id, [Bind("ID,FirstName,LastName")] Author author)
